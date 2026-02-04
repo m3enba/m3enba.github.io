@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mannequin Duel 1v1 - Difficulty Levels</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #0f172a;
+            font-family: 'Inter', sans-serif;
+            user-select: none;
+        }
+        canvas {
+            display: block;
+            touch-action: none;
+        }
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 20px;
+        }
+        .hud-panel {
+            pointer-events: auto;
+        }
+        .health-bar-container {
+            width: 300px;
+            height: 20px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            overflow: hidden;
+            border: 2px solid rgba(255, 255, 255, 0.2);
+        }
+        .health-bar-fill {
+            height: 100%;
+            transition: width 0.3s ease-out;
+        }
+        .modal {
+            pointer-events: auto;
+            background: rgba(15, 23, 42, 0.95);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            max-width: 500px;
+            width: 90%;
+        }
+        .level-btn {
+            transition: all 0.2s;
+        }
+        .level-btn:hover {
+            transform: translateY(-2px);
+        }
+    </style>
+</head>
+<body>
+
+<div id="ui-layer">
+    <div class="flex justify-between items-start">
+        <div class="hud-panel p-4 rounded-xl bg-slate-900/50 border border-amber-500/30">
+            <div class="text-amber-400 font-bold mb-1">WOODEN MANNEQUIN</div>
+            <div class="health-bar-container">
+                <div id="player-health" class="health-bar-fill bg-amber-500" style="width: 100%"></div>
+            </div>
+        </div>
+        
+        <div class="hud-panel p-4 rounded-xl bg-slate-900/50 border border-slate-400/30 text-right">
+            <div id="enemy-name" class="text-slate-300 font-bold mb-1">IRON MANNEQUIN</div>
+            <div class="health-bar-container">
+                <div id="enemy-health" class="health-bar-fill bg-slate-400" style="width: 100%"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Difficulty / Game Over Modal -->
+    <div id="game-modal" class="self-center p-8 rounded-2xl modal flex flex-col items-center text-white">
+        <h1 id="modal-title" class="text-4xl font-black mb-2 tracking-tighter">MANNEQUIN DUEL</h1>
+        <p id="modal-text" class="text-slate-400 mb-8 text-center text-sm">
+            Select your challenge level
+        </p>
+        
+        <div class="grid grid-cols-2 gap-4 w-full mb-8">
+            <button onclick="startGame('training')" class="level-btn p-4 rounded-xl bg-slate-800 border border-slate-600 hover:border-cyan-400 text-left">
+                <div class="font-bold text-cyan-400">TRAINING</div>
+                <div class="text-xs text-slate-400">Stationary dummy. No attacks.</div>
+            </button>
+            <button onclick="startGame('easy')" class="level-btn p-4 rounded-xl bg-slate-800 border border-slate-600 hover:border-green-400 text-left">
+                <div class="font-bold text-green-400">EASY</div>
+                <div class="text-xs text-slate-400">Slow movement. Passive.</div>
+            </button>
+            <button onclick="startGame('medium')" class="level-btn p-4 rounded-xl bg-slate-800 border border-slate-600 hover:border-amber-400 text-left">
+                <div class="font-bold text-amber-400">MEDIUM</div>
+                <div class="text-xs text-slate-400">Normal reaction speed.</div>
+            </button>
+            <button onclick="startGame('hard')" class="level-btn p-4 rounded-xl bg-slate-800 border border-slate-600 hover:border-red-500 text-left">
+                <div class="font-bold text-red-500">HARD</div>
+                <div class="text-xs text-slate-400">Aggressive. Fast. Chases you.</div>
+            </button>
+        </div>
+
+        <div class="text-slate-500 text-[10px] uppercase tracking-widest border-t border-slate-800 pt-4 w-full text-center">
+            [A][D] Move • [SPACE] Jump • [Click] Strike • [Hold] Extend
+        </div>
+    </div>
+
+    <div class="text-slate-500 text-sm text-center mb-4">
+        Hold Click to Extend Sword (0.15x Speed)
+    </div>
+</div>
+
+<canvas id="gameCanvas"></canvas>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const modal = document.getElementById('game-modal');
+    const modalTitle = document.getElementById('modal-title');
+    const modalText = document.getElementById('modal-text');
+    const enemyNameEl = document.getElementById('enemy-name');
+    const playerHealthEl = document.getElementById('player-health');
+    const enemyHealthEl = document.getElementById('enemy-health');
+
+    const PLAYER_SPEED = 6;
+    const CHARGE_SPEED_MULTIPLIER = 0.15;
+    const JUMP_FORCE = -15;
+    const GRAVITY = 0.7;
+    const BASIC_RANGE = 90;
+    const EXTENDED_RANGE = 180;
+    const BASIC_COOLDOWN = 18;
+    const EXTENDED_COOLDOWN = 45; 
+    const CHARGE_TIME_NEEDED = 500; 
+
+    // Bot Stats by Level
+    const LEVELS = {
+        training: { name: 'TRAINING DUMMY', speed: 0, reaction: 0, aggressive: false, canJump: false },
+        easy: { name: 'RUSTY MANNEQUIN', speed: 2.5, reaction: 0.01, aggressive: true, canJump: false },
+        medium: { name: 'IRON MANNEQUIN', speed: 4.5, reaction: 0.05, aggressive: true, canJump: true },
+        hard: { name: 'STEEL CHAMPION', speed: 6.5, reaction: 0.12, aggressive: true, canJump: true }
+    };
+
+    let gameState = 'START';
+    let currentLevel = 'training';
+    let player, enemy, particles;
+    let keys = {};
+    let mouseHeld = false;
+    let chargeStartTime = 0;
+
+    function init(levelKey) {
+        resize();
+        currentLevel = levelKey;
+        const levelData = LEVELS[levelKey];
+        enemyNameEl.innerText = levelData.name;
+
+        player = {
+            id: 'p1', x: 200, y: 0,
+            width: 45, height: 75,
+            color: '#b45309', 
+            hp: 100, vx: 0, vy: 0,
+            grounded: false,
+            attacking: 0, 
+            isExtended: false,
+            cooldown: 0,
+            stunned: 0,
+            dir: 1
+        };
+        enemy = {
+            id: 'p2', x: canvas.width - 300, y: 0,
+            width: 45, height: 75,
+            color: levelKey === 'hard' ? '#ef4444' : '#94a3b8', 
+            hp: 100, vx: 0, vy: 0,
+            grounded: false,
+            attacking: 0,
+            isExtended: false,
+            cooldown: 0,
+            stunned: 0,
+            dir: -1,
+            level: levelData
+        };
+        particles = [];
+        updateUI();
+    }
+
+    function startGame(levelKey) {
+        init(levelKey);
+        gameState = 'PLAYING';
+        modal.classList.add('hidden');
+    }
+
+    function resize() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+    }
+
+    window.addEventListener('resize', resize);
+    
+    window.addEventListener('keydown', e => {
+        keys[e.code] = true;
+        if (gameState === 'PLAYING' && e.code === 'Space' && player.grounded && player.stunned <= 0) {
+            player.vy = JUMP_FORCE;
+            player.grounded = false;
+        }
+    });
+    window.addEventListener('keyup', e => keys[e.code] = false);
+    
+    window.addEventListener('mousedown', () => {
+        if (gameState === 'PLAYING' && player.cooldown <= 0 && player.stunned <= 0) {
+            mouseHeld = true;
+            chargeStartTime = Date.now();
+        }
+    });
+
+    window.addEventListener('mouseup', () => {
+        if (!mouseHeld) return;
+        mouseHeld = false;
+        
+        const duration = Date.now() - chargeStartTime;
+        if (duration >= CHARGE_TIME_NEEDED) {
+            performHit(player, enemy, true);
+        } else {
+            performHit(player, enemy, false);
+        }
+    });
+
+    function performHit(attacker, target, extended) {
+        attacker.isExtended = extended;
+        attacker.cooldown = extended ? EXTENDED_COOLDOWN : BASIC_COOLDOWN;
+        attacker.attacking = 15;
+        
+        setTimeout(() => {
+            if(gameState === 'PLAYING' && attacker.attacking > 0) {
+                checkHit(attacker, target);
+            }
+        }, 80);
+    }
+
+    function checkHit(attacker, target) {
+        if (target.hp <= 0) return;
+        
+        const currentRange = attacker.isExtended ? EXTENDED_RANGE : BASIC_RANGE;
+        const dx = (target.x + target.width / 2) - (attacker.x + attacker.width / 2);
+        const dy = (target.y + target.height / 2) - (attacker.y + attacker.height / 2);
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        const isFacing = (attacker.dir === 1 && dx > 0) || (attacker.dir === -1 && dx < 0);
+        
+        if (dist < currentRange && isFacing) {
+            const isCrit = !attacker.grounded && attacker.vy > 0;
+            const damage = attacker.isExtended ? 20 : (isCrit ? 15 : 10);
+            
+            target.hp -= damage;
+            target.vx = attacker.dir * (attacker.isExtended ? 20 : 12); 
+            target.vy = -4; 
+            target.stunned = attacker.isExtended ? 30 : 15; 
+            
+            const particleColor = attacker.isExtended ? '#22d3ee' : (isCrit ? '#fbbf24' : target.color);
+            createParticles(target.x + target.width/2, target.y + target.height/2, particleColor, isCrit || attacker.isExtended);
+            updateUI();
+        }
+    }
+
+    function createParticles(x, y, color, big) {
+        const count = big ? 20 : 10;
+        for (let i = 0; i < count; i++) {
+            particles.push({
+                x, y,
+                vx: (Math.random() - 0.5) * (big ? 20 : 12),
+                vy: (Math.random() - 0.5) * (big ? 20 : 12),
+                life: 1.0,
+                size: big ? 4 : 2,
+                color: color
+            });
+        }
+    }
+
+    function updateUI() {
+        playerHealthEl.style.width = Math.max(0, player.hp) + '%';
+        enemyHealthEl.style.width = Math.max(0, enemy.hp) + '%';
+    }
+
+    function drawSword(char) {
+        ctx.save();
+        ctx.translate(15, -5);
+        
+        if (char.attacking > 0) {
+            const progress = (15 - char.attacking) / 15;
+            ctx.rotate(-Math.PI/2 + (progress * Math.PI));
+        } else {
+            ctx.rotate(Math.PI / 8);
+        }
+
+        const baseBladeLen = 55;
+        const bladeLen = char.isExtended && char.attacking > 0 ? baseBladeLen * 2 : baseBladeLen;
+        
+        const grad = ctx.createLinearGradient(0, -bladeLen, 0, 0);
+        if (char.isExtended && char.attacking > 0) {
+            grad.addColorStop(0, '#22d3ee');
+            grad.addColorStop(1, '#94a3b8');
+        } else {
+            grad.addColorStop(0, '#e2e8f0');
+            grad.addColorStop(1, '#94a3b8');
+        }
+        
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.moveTo(-4, 0);
+        ctx.lineTo(4, 0);
+        ctx.lineTo(1, -bladeLen);
+        ctx.lineTo(-1, -bladeLen);
+        ctx.closePath();
+        ctx.fill();
+        
+        ctx.strokeStyle = 'white';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        ctx.fillStyle = '#475569';
+        ctx.fillRect(-10, 0, 20, 4);
+        ctx.fillStyle = '#451a03';
+        ctx.fillRect(-2, 4, 4, 12);
+        ctx.restore();
+    }
+
+    function drawMannequin(char) {
+        ctx.save();
+        ctx.translate(char.x + char.width / 2, char.y + char.height / 2);
+
+        if (char.id === 'p1' && mouseHeld && char.cooldown <= 0) {
+            const barW = 50;
+            const progress = Math.min(1, (Date.now() - chargeStartTime) / CHARGE_TIME_NEEDED);
+            ctx.fillStyle = 'rgba(0,0,0,0.6)';
+            ctx.fillRect(-barW/2, -90, barW, 8);
+            ctx.fillStyle = progress >= 1 ? '#22d3ee' : '#ffffff';
+            ctx.fillRect(-barW/2, -90, barW * progress, 8);
+            if (progress >= 1) {
+                ctx.strokeStyle = '#22d3ee';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(-barW/2 - 2, -92, barW + 4, 12);
+            }
+        }
+
+        if (char.dir === -1) ctx.scale(-1, 1);
+
+        if (char.stunned > 0 && Math.floor(Date.now() / 50) % 2 === 0) {
+            ctx.filter = 'brightness(3)';
+        }
+
+        ctx.fillStyle = char.color;
+        ctx.beginPath();
+        ctx.roundRect(-18, -30, 36, 45, 10);
+        ctx.fill();
+        
+        ctx.beginPath();
+        ctx.arc(0, -45, 16, 0, Math.PI * 2);
+        ctx.fill();
+
+        drawSword(char);
+        ctx.restore();
+    }
+
+    function handleCollision(p1, p2) {
+        const p1Mid = p1.x + p1.width/2;
+        const p2Mid = p2.x + p2.width/2;
+        const overlapX = (p1.width/2 + p2.width/2) - Math.abs(p1Mid - p2Mid);
+        
+        if (overlapX > 0 && Math.abs(p1.y - p2.y) < p1.height) {
+            const dir = p1Mid < p2Mid ? -1 : 1;
+            p1.x += (overlapX / 2) * dir;
+            p2.x -= (overlapX / 2) * dir;
+        }
+    }
+
+    function update() {
+        if (gameState !== 'PLAYING') return;
+
+        // Player
+        if (player.stunned <= 0) {
+            const currentMaxSpeed = mouseHeld ? (PLAYER_SPEED * CHARGE_SPEED_MULTIPLIER) : PLAYER_SPEED;
+            if (keys['KeyA']) { player.vx = -currentMaxSpeed; player.dir = -1; }
+            else if (keys['KeyD']) { player.vx = currentMaxSpeed; player.dir = 1; }
+            else { player.vx *= 0.8; }
+        } else {
+            player.vx *= 0.95;
+            mouseHeld = false;
+        }
+        applyPhysics(player);
+
+        // Bot AI
+        if (enemy.stunned <= 0) {
+            const dist = player.x - enemy.x;
+            const absDist = Math.abs(dist);
+            
+            // Movement logic
+            if (enemy.level.speed > 0) {
+                if (absDist > 70) {
+                    enemy.vx = Math.sign(dist) * enemy.level.speed;
+                    enemy.dir = Math.sign(dist);
+                } else {
+                    enemy.vx *= 0.8;
+                }
+            } else {
+                enemy.vx *= 0.8;
+            }
+
+            // Attack logic
+            if (enemy.level.aggressive && enemy.cooldown <= 0) {
+                if (absDist < (enemy.level.speed > 5 ? EXTENDED_RANGE : BASIC_RANGE) && Math.random() < enemy.level.reaction) {
+                    const useExtended = enemy.level.speed > 5 && Math.random() < 0.3;
+                    performHit(enemy, player, useExtended);
+                }
+            }
+
+            // Jump logic
+            if (enemy.level.canJump && enemy.grounded) {
+                if ((player.y < enemy.y - 80 && Math.random() < 0.02) || (absDist < 50 && Math.random() < 0.01)) {
+                    enemy.vy = JUMP_FORCE;
+                    enemy.grounded = false;
+                }
+            }
+        } else {
+            enemy.vx *= 0.95;
+        }
+        applyPhysics(enemy);
+
+        handleCollision(player, enemy);
+
+        [player, enemy].forEach(char => {
+            if (char.attacking > 0) char.attacking--;
+            if (char.cooldown > 0) char.cooldown--;
+            if (char.stunned > 0) char.stunned--;
+        });
+
+        for (let i = particles.length - 1; i >= 0; i--) {
+            const p = particles[i];
+            p.x += p.vx; p.y += p.vy;
+            p.vy += 0.4; p.life -= 0.03;
+            if (p.life <= 0) particles.splice(i, 1);
+        }
+
+        // Game Over logic
+        if (player.hp <= 0 || enemy.hp <= 0) {
+            gameState = 'GAMEOVER';
+            const win = enemy.hp <= 0;
+            modalTitle.innerText = win ? 'VICTORY' : 'DEFEATED';
+            modalText.innerText = win ? `You conquered the ${enemy.level.name}.` : `The ${enemy.level.name} was too strong.`;
+            modal.classList.remove('hidden');
+        }
+    }
+
+    function applyPhysics(char) {
+        char.vy += GRAVITY;
+        char.x += char.vx;
+        char.y += char.vy;
+
+        const ground = canvas.height - 40 - char.height;
+        if (char.y > ground) {
+            char.y = ground;
+            char.vy = 0;
+            char.grounded = true;
+        }
+
+        if (char.x < 0) char.x = 0;
+        if (char.x > canvas.width - char.width) char.x = canvas.width - char.width;
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#1e293b';
+        ctx.fillRect(0, canvas.height - 40, canvas.width, 40);
+
+        if (player && enemy) {
+            drawMannequin(player);
+            drawMannequin(enemy);
+        }
+
+        particles.forEach(p => {
+            ctx.globalAlpha = p.life;
+            ctx.fillStyle = p.color;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.size, 0, Math.PI*2);
+            ctx.fill();
+        });
+        ctx.globalAlpha = 1.0;
+
+        requestAnimationFrame(draw);
+        update();
+    }
+
+    init('training'); // Initial state
+    draw();
+</script>
+</body>
+</html>
